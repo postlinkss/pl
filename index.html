@@ -1,0 +1,501 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  onAuthStateChanged,
+  signInWithCustomToken
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  addDoc, 
+  onSnapshot, 
+  deleteDoc, 
+  doc, 
+  serverTimestamp,
+  query,
+  orderBy
+} from 'firebase/firestore';
+import { 
+  Bell, 
+  MessageCircle, 
+  ExternalLink, 
+  Plus, 
+  Trash2, 
+  X, 
+  Image as ImageIcon,
+  Link as LinkIcon,
+  CheckCircle,
+  LogIn,
+  LogOut,
+  User,
+  Share2
+} from 'lucide-react';
+
+// --- CONFIGURAÇÃO DO FIREBASE ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+// --- COMPONENTE PRINCIPAL ---
+export default function PortfolioNewsApp() {
+  const [user, setUser] = useState(null);
+  const [posts, setPosts] = useState([]);
+  const [isAdminMode, setIsAdminMode] = useState(false); // Simulação de modo admin para demonstração
+  const [loading, setLoading] = useState(true);
+  
+  // Estado do formulário de novo post
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+  const [newLink, setNewLink] = useState('');
+  const [newImage, setNewImage] = useState('');
+  const [newDescription, setNewDescription] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  // Estado de notificação
+  const [subscribed, setSubscribed] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState('default');
+
+  // 1. Inicialização e Autenticação
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("Erro na autenticação:", error);
+      }
+    };
+
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      // Verifica permissão de notificação atual
+      if ('Notification' in window) {
+        setNotificationPermission(Notification.permission);
+        if (Notification.permission === 'granted') {
+          setSubscribed(true);
+        }
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Carregar Posts (Dados Públicos)
+  useEffect(() => {
+    if (!user) return;
+
+    // Acessando coleção pública de posts
+    const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'news_posts');
+    
+    // Firestore não permite orderBy complexo sem index, então ordenamos no cliente
+    const unsubscribePosts = onSnapshot(postsRef, (snapshot) => {
+      const loadedPosts = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      // Ordenação cliente-side por data (mais recente primeiro)
+      loadedPosts.sort((a, b) => {
+        const dateA = a.createdAt?.seconds || 0;
+        const dateB = b.createdAt?.seconds || 0;
+        return dateB - dateA;
+      });
+
+      setPosts(loadedPosts);
+      setLoading(false);
+    }, (error) => {
+      console.error("Erro ao buscar posts:", error);
+      setLoading(false);
+    });
+
+    return () => unsubscribePosts();
+  }, [user]);
+
+  // --- FUNÇÕES DE AÇÃO ---
+
+  const handleSubscribe = async () => {
+    if (!('Notification' in window)) {
+      alert("Este navegador não suporta notificações.");
+      return;
+    }
+
+    try {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+      
+      if (permission === 'granted') {
+        setSubscribed(true);
+        new Notification("Notificações Ativadas!", {
+          body: "Você receberá alertas sobre novos posts neste portfólio.",
+          icon: "https://cdn-icons-png.flaticon.com/512/1827/1827349.png" // Ícone genérico
+        });
+      } else {
+        setSubscribed(false);
+      }
+    } catch (error) {
+      console.error("Erro ao solicitar permissão:", error);
+    }
+  };
+
+  const handleAddPost = async (e) => {
+    e.preventDefault();
+    if (!newTitle || !newLink) return;
+
+    setSubmitting(true);
+    try {
+      const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'news_posts');
+      await addDoc(postsRef, {
+        title: newTitle,
+        link: newLink,
+        imageUrl: newImage || 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?auto=format&fit=crop&q=80&w=1000', // Imagem padrão
+        description: newDescription,
+        createdAt: serverTimestamp(),
+        authorId: user.uid
+      });
+
+      // Limpar formulário
+      setNewTitle('');
+      setNewLink('');
+      setNewImage('');
+      setNewDescription('');
+      setIsFormOpen(false);
+
+      // Feedback visual simples
+      if (notificationPermission === 'granted') {
+        new Notification("Novo Post Publicado!", {
+          body: `Confira: ${newTitle}`
+        });
+      }
+
+    } catch (error) {
+      console.error("Erro ao publicar:", error);
+      alert("Erro ao publicar post. Tente novamente.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDeletePost = async (postId) => {
+    if (!confirm("Tem certeza que deseja apagar este post?")) return;
+    try {
+      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'news_posts', postId);
+      await deleteDoc(docRef);
+    } catch (error) {
+      console.error("Erro ao deletar:", error);
+    }
+  };
+
+  const openWhatsApp = () => {
+    // Substitua pelo seu número real
+    const phoneNumber = "5511999999999"; 
+    const message = encodeURIComponent("Olá! Vi seu portfólio e gostaria de conversar.");
+    window.open(`https://wa.me/${phoneNumber}?text=${message}`, '_blank');
+  };
+
+  // --- RENDERIZAÇÃO ---
+
+  return (
+    <div className="min-h-screen bg-gray-50 font-sans pb-20">
+      
+      {/* 1. Header / Capa e Perfil */}
+      <div className="bg-white shadow-sm mb-6">
+        {/* Capa */}
+        <div className="h-48 md:h-64 w-full bg-cover bg-center relative" 
+             style={{ backgroundImage: 'url("https://images.unsplash.com/photo-1579546929518-9e396f3cc809?auto=format&fit=crop&q=80&w=2000")' }}>
+          <div className="absolute inset-0 bg-black bg-opacity-30"></div>
+        </div>
+
+        {/* Perfil Container */}
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 relative">
+          <div className="-mt-16 sm:-mt-20 flex flex-col sm:flex-row items-center sm:items-end sm:space-x-5">
+            {/* Foto de Perfil */}
+            <div className="relative">
+              <img 
+                className="h-32 w-32 sm:h-40 sm:w-40 rounded-full border-4 border-white shadow-lg object-cover bg-gray-200"
+                src="https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=400" 
+                alt="Perfil" 
+              />
+              <div className="absolute bottom-2 right-2 bg-green-500 w-5 h-5 rounded-full border-2 border-white" title="Online"></div>
+            </div>
+
+            {/* Informações e Botões */}
+            <div className="mt-4 sm:mt-0 sm:pb-4 text-center sm:text-left flex-1">
+              <h1 className="text-2xl font-bold text-gray-900">João Silva</h1>
+              <p className="text-gray-600 font-medium">Jornalista & Desenvolvedor</p>
+              <p className="text-sm text-gray-500 mt-1 max-w-md">
+                Compartilhando as últimas notícias de tecnologia, desenvolvimento web e inovação.
+              </p>
+            </div>
+
+            {/* Botão Inscrever-se */}
+            <div className="mt-4 sm:mt-0 sm:pb-4">
+              <button 
+                onClick={handleSubscribe}
+                disabled={subscribed}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-full shadow-sm transition-all duration-200 ${
+                  subscribed 
+                    ? 'bg-gray-100 text-green-600 border border-green-200' 
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
+                }`}
+              >
+                {subscribed ? <CheckCircle size={18} /> : <Bell size={18} />}
+                <span>{subscribed ? 'Inscrito' : 'Receber Notificações'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 2. Conteúdo Principal */}
+      <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+        
+        {/* Admin Toolbar (Visível apenas se isAdminMode for true) */}
+        {isAdminMode && (
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-blue-100 mb-6 flex justify-between items-center animate-fade-in">
+            <div>
+              <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+                <User size={18} className="text-blue-600"/> Painel de Controle
+              </h3>
+              <p className="text-xs text-gray-500">Você está logado como administrador.</p>
+            </div>
+            <button 
+              onClick={() => setIsFormOpen(true)}
+              className="bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700 transition flex items-center gap-2 text-sm font-medium"
+            >
+              <Plus size={18} /> Novo Post
+            </button>
+          </div>
+        )}
+
+        {/* Modal de Novo Post */}
+        {isFormOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 animate-scale-in">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold text-gray-900">Adicionar Notícia</h2>
+                <button onClick={() => setIsFormOpen(false)} className="text-gray-400 hover:text-gray-600">
+                  <X size={24} />
+                </button>
+              </div>
+              
+              <form onSubmit={handleAddPost} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Título</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={newTitle}
+                    onChange={(e) => setNewTitle(e.target.value)}
+                    className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+                    placeholder="Ex: Nova tecnologia lançada..."
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Descrição Curta</label>
+                  <textarea 
+                    rows="2"
+                    value={newDescription}
+                    onChange={(e) => setNewDescription(e.target.value)}
+                    className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition"
+                    placeholder="Breve resumo da notícia..."
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Link do Artigo</label>
+                  <div className="relative">
+                    <LinkIcon className="absolute left-3 top-2.5 text-gray-400" size={16} />
+                    <input 
+                      type="url" 
+                      required
+                      value={newLink}
+                      onChange={(e) => setNewLink(e.target.value)}
+                      className="w-full pl-10 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                      placeholder="https://..."
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">URL da Imagem (Opcional)</label>
+                  <div className="relative">
+                    <ImageIcon className="absolute left-3 top-2.5 text-gray-400" size={16} />
+                    <input 
+                      type="url" 
+                      value={newImage}
+                      onChange={(e) => setNewImage(e.target.value)}
+                      className="w-full pl-10 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                      placeholder="https://exemplo.com/imagem.jpg"
+                    />
+                  </div>
+                </div>
+
+                <button 
+                  type="submit" 
+                  disabled={submitting}
+                  className="w-full py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition shadow-md disabled:opacity-50"
+                >
+                  {submitting ? 'Publicando...' : 'Publicar Notícia'}
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Lista de Posts */}
+        <div className="space-y-6">
+          <div className="flex items-center justify-between pb-2 border-b border-gray-200">
+            <h2 className="text-xl font-bold text-gray-800">Últimas Publicações</h2>
+            <span className="text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded-md">{posts.length} posts</span>
+          </div>
+
+          {loading ? (
+            <div className="flex justify-center py-12">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            </div>
+          ) : posts.length === 0 ? (
+            <div className="text-center py-12 text-gray-400 bg-white rounded-xl shadow-sm border border-dashed border-gray-300">
+              <p>Nenhuma notícia publicada ainda.</p>
+              {isAdminMode && <p className="text-sm mt-2 text-blue-500">Clique em "Novo Post" para começar.</p>}
+            </div>
+          ) : (
+            <div className="grid gap-6 md:grid-cols-2">
+              {posts.map((post) => (
+                <article key={post.id} className="bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow duration-300 overflow-hidden border border-gray-100 flex flex-col h-full">
+                  {/* Imagem do Post */}
+                  <a href={post.link} target="_blank" rel="noopener noreferrer" className="block relative h-48 overflow-hidden group">
+                    <img 
+                      src={post.imageUrl} 
+                      alt={post.title} 
+                      className="w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-500"
+                      onError={(e) => {e.target.src = 'https://images.unsplash.com/photo-1585829365295-ab7cd400c167?auto=format&fit=crop&q=80&w=1000'}}
+                    />
+                    <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-all duration-300"></div>
+                  </a>
+
+                  {/* Conteúdo do Post */}
+                  <div className="p-5 flex-1 flex flex-col">
+                    <div className="flex justify-between items-start mb-2">
+                      <h3 className="text-lg font-bold text-gray-900 leading-tight hover:text-blue-600 transition-colors line-clamp-2">
+                        <a href={post.link} target="_blank" rel="noopener noreferrer">
+                          {post.title}
+                        </a>
+                      </h3>
+                    </div>
+                    
+                    <p className="text-gray-600 text-sm mb-4 line-clamp-3 flex-1">
+                      {post.description || "Clique no link para ler a notícia completa."}
+                    </p>
+
+                    <div className="mt-auto flex items-center justify-between pt-4 border-t border-gray-100">
+                      <a 
+                        href={post.link} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-blue-600 text-sm font-semibold flex items-center hover:underline"
+                      >
+                        Ler matéria <ExternalLink size={14} className="ml-1" />
+                      </a>
+
+                      <div className="flex items-center space-x-2">
+                         <button 
+                           onClick={() => {
+                             if(navigator.share) {
+                               navigator.share({
+                                 title: post.title,
+                                 url: post.link
+                               }).catch(console.error);
+                             } else {
+                               navigator.clipboard.writeText(post.link);
+                               alert('Link copiado!');
+                             }
+                           }}
+                           className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100"
+                           title="Compartilhar"
+                         >
+                           <Share2 size={16} />
+                         </button>
+                        {isAdminMode && (
+                          <button 
+                            onClick={() => handleDeletePost(post.id)}
+                            className="text-red-400 hover:text-red-600 p-1 rounded-full hover:bg-red-50 transition"
+                            title="Excluir Post"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
+
+      {/* Botão Flutuante do WhatsApp */}
+      <button 
+        onClick={openWhatsApp}
+        className="fixed bottom-6 right-6 bg-green-500 hover:bg-green-600 text-white p-4 rounded-full shadow-lg transition-transform hover:scale-110 z-40 flex items-center justify-center animate-bounce-slow"
+        aria-label="Falar no WhatsApp"
+      >
+        <MessageCircle size={28} fill="white" className="text-white" />
+      </button>
+
+      {/* Footer / Toggle Admin Mode */}
+      <footer className="mt-20 py-8 bg-white border-t border-gray-200">
+        <div className="max-w-4xl mx-auto px-4 text-center">
+          <p className="text-gray-500 text-sm mb-4">&copy; 2024 João Silva News. Todos os direitos reservados.</p>
+          
+          {/* Toggle Admin - Apenas para DEMONSTRAÇÃO */}
+          <div className="inline-flex items-center space-x-2 bg-gray-100 px-3 py-1.5 rounded-full">
+            <span className="text-xs text-gray-500 font-medium uppercase tracking-wide">Modo de Visualização:</span>
+            <button 
+              onClick={() => setIsAdminMode(!isAdminMode)}
+              className={`text-xs font-bold px-3 py-1 rounded-full transition-colors ${!isAdminMode ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              Visitante
+            </button>
+            <button 
+              onClick={() => setIsAdminMode(!isAdminMode)}
+              className={`text-xs font-bold px-3 py-1 rounded-full transition-colors ${isAdminMode ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              Admin (Dono)
+            </button>
+          </div>
+          <p className="text-[10px] text-gray-400 mt-2">
+            Use o botão acima para alternar entre ver o site como visitante ou como dono (upload).
+          </p>
+        </div>
+      </footer>
+
+      {/* Estilos Globais inline para animações simples */}
+      <style>{`
+        @keyframes fade-in {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes scale-in {
+          from { opacity: 0; transform: scale(0.95); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        .animate-fade-in { animation: fade-in 0.3s ease-out; }
+        .animate-scale-in { animation: scale-in 0.2s ease-out; }
+        .animate-bounce-slow { animation: bounce 3s infinite; }
+        @keyframes bounce {
+          0%, 100% { transform: translateY(-5%); animation-timing-function: cubic-bezier(0.8, 0, 1, 1); }
+          50% { transform: translateY(0); animation-timing-function: cubic-bezier(0, 0, 0.2, 1); }
+        }
+      `}</style>
+    </div>
+  );
+}
